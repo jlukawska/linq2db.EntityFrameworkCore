@@ -2,6 +2,7 @@
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using FluentAssertions;
 using LinqToDB.Data;
 using LinqToDB.EntityFrameworkCore.BaseTests;
 using LinqToDB.EntityFrameworkCore.BaseTests.Models.Northwind;
@@ -76,29 +77,7 @@ namespace LinqToDB.EntityFrameworkCore.SqlServer.Tests
 			//ctx.Database.EnsureDeleted();
 			if (ctx.Database.EnsureCreated())
 			{
-
-
-				SetIdentityInsert(ctx, "[dbo].[Employees]", true);
-				SetIdentityInsert(ctx, "[dbo].[Categories]", true);
-				SetIdentityInsert(ctx, "[dbo].[Orders]", true);
-				SetIdentityInsert(ctx, "[dbo].[Products]", true);
-				SetIdentityInsert(ctx, "[dbo].[Shippers]", true);
-				SetIdentityInsert(ctx, "[dbo].[Suppliers]", true);
-
-				try
-				{
-					NorthwindData.Seed(ctx);
-				}
-				finally
-				{
-					SetIdentityInsert(ctx, "[dbo].[Employees]", false);
-					SetIdentityInsert(ctx, "[dbo].[Categories]", false);
-					SetIdentityInsert(ctx, "[dbo].[Orders]", false);
-					SetIdentityInsert(ctx, "[dbo].[Products]", false);
-					SetIdentityInsert(ctx, "[dbo].[Shippers]", false);
-					SetIdentityInsert(ctx, "[dbo].[Suppliers]", false);
-				}
-
+				NorthwindData.Seed(ctx);
 			}			
 			return ctx;
 		}
@@ -370,26 +349,6 @@ namespace LinqToDB.EntityFrameworkCore.SqlServer.Tests
 			}
 		}
 
-
-		[Test]
-		public void TestIdentityColumn()
-		{
-			using (var ctx = CreateContext(false))
-			{
-				var dependencies  = ctx.GetService<RelationalSqlTranslatingExpressionVisitorDependencies>();
-				var mappingSource = ctx.GetService<IRelationalTypeMappingSource>();
-				var converters    = ctx.GetService<IValueConverterSelector>();
-				var dLogger       = ctx.GetService<IDiagnosticsLogger<DbLoggerCategory.Query>>();
-				var ms = LinqToDBForEFTools.GetMappingSchema(ctx.Model, converters, dependencies, mappingSource, dLogger);
-				
-				var identity = ms.GetAttribute<ColumnAttribute>(typeof(Customer),
-					MemberHelper.MemberOf<Customer>(c => c.CustomerId));
-
-				//TODO:
-				//Assert.NotNull(identity);
-				//Assert.AreEqual(true, identity.IsIdentity);
-			}
-		}
 
 		[Repeat(2)]
 		[Test]
@@ -674,7 +633,7 @@ namespace LinqToDB.EntityFrameworkCore.SqlServer.Tests
 		{
 			using (var ctx = CreateContext(enableFilter))
 			{
-				var customer = await ctx.Customers.FirstOrDefaultAsync();
+				var customer = await ctx.Customers.FirstAsync();
 
 				var updatable = ctx.Customers.Where(c => c.CustomerId == customer.CustomerId)
 					.Set(c => c.CompanyName, customer.CompanyName);
@@ -773,6 +732,104 @@ namespace LinqToDB.EntityFrameworkCore.SqlServer.Tests
 			}
 		}
 
+		[Test]
+		public void TestUpdate([Values(true, false)] bool enableFilter)
+		{
+			using (var ctx = CreateContext(enableFilter))
+			{
+				int? test = 1;
+				ctx.Employees.IgnoreQueryFilters().Where(e => e.EmployeeId == test).Update(x => new Employee
+				{
+					Address = x.Address
 
+				});
+			}
+		}
+
+		[Test]
+		public async Task TestUpdateAsync([Values(true, false)] bool enableFilter)
+		{
+			using (var ctx = CreateContext(enableFilter))
+			{
+				int? test = 1;
+				await ctx.Employees.IgnoreQueryFilters().Where(e => e.EmployeeId == test).UpdateAsync(x => new Employee
+				{
+					Address = x.Address
+
+				});
+			}
+		}
+
+		[Test]
+		public void TestCreateTempTable([Values(true, false)] bool enableFilter)
+		{
+			using (var ctx = CreateContext(enableFilter))
+			{
+				using var db = ctx.CreateLinqToDbContext();
+				using var temp = db.CreateTempTable(ctx.Employees, "#TestEmployees");
+
+				Assert.AreEqual(ctx.Employees.Count(), temp.Count());
+			}
+		}
+
+
+		[Test]
+		public void TestForeignKey([Values(true, false)] bool enableFilter)
+		{
+			using (var ctx = CreateContext(enableFilter))
+			{
+				var resultEF = ctx.Employees.Include(e => e.ReportsToNavigation).ToArray();
+				var result = ctx.Employees.Include(e => e.ReportsToNavigation).ToLinqToDB().ToArray();
+
+				AreEqual(resultEF, result);
+			}
+		}
+
+
+		[Test]
+		public void TestCommandTimeout()
+		{
+			int timeoutErrorCode = -2;     // Timeout Expired
+			int commandTimeout = 1;
+			int commandExecutionTime = 5;
+			var createProcessLongFunctionSql =   // function that takes @secondsNumber seconds
+				@"CREATE OR ALTER FUNCTION dbo.[ProcessLong]
+					(
+						@secondsNumber int
+					)
+					RETURNS int
+					AS
+					BEGIN
+						declare @startTime datetime = getutcdate()
+						while datediff(second, @startTime, getutcdate()) < @secondsNumber
+						begin
+							set @startTime = @startTime
+						end
+						return 1
+					END";
+			var dropProcessLongFunctionSql = @"DROP FUNCTION IF EXISTS [dbo].[ProcessLong]";
+
+			using (var ctx = CreateContext(false))
+			{
+				try
+				{
+					ctx.Database.ExecuteSqlRaw(createProcessLongFunctionSql);
+					ctx.Database.SetCommandTimeout(commandTimeout);
+
+					var query = from p in ctx.Products
+								select NorthwindContext.ProcessLong(commandExecutionTime);
+
+					var exception = Assert.Throws<Microsoft.Data.SqlClient.SqlException>(() =>
+					{
+						var result = query.ToLinqToDB().First();
+					});
+					Assert.AreEqual(exception.Number, timeoutErrorCode);
+				}
+				finally
+				{
+					ctx.Database.ExecuteSqlRaw(dropProcessLongFunctionSql);
+				}
+			}
+		}
 	}
 }

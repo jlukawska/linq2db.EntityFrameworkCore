@@ -23,7 +23,7 @@ namespace LinqToDB.EntityFrameworkCore
 	using Common;
 	using Internal;
 	using SqlQuery;
-	using SqlExpression = Microsoft.EntityFrameworkCore.Query.SqlExpressions.SqlExpression;
+	using SqlExpression = SqlExpression;
 
 	/// <summary>
 	/// LINQ To DB metadata reader for EF.Core model.
@@ -157,6 +157,27 @@ namespace LinqToDB.EntityFrameworkCore
 								                  .FirstOrDefault(v => CompareProperty(v.p, memberInfo))?.index ?? 0;
 						}
 
+						var isIdentity = prop.GetAnnotations()
+							.Any(a =>
+							{
+								if (a.Name.EndsWith(":ValueGenerationStrategy"))
+									return a.Value?.ToString().Contains("Identity") == true;
+
+								if (a.Name.EndsWith(":Autoincrement"))
+									return a.Value is bool b && b;
+
+								// for postgres
+								if (a.Name == "Relational:DefaultValueSql")
+								{
+									if (a.Value is string str)
+									{
+										return str.ToLower().Contains("nextval");
+									}
+								}
+
+								return false;
+							});
+
 						var storeObjectId = GetStoreObjectIdentifier(et);
 
 						return new T[]{(T)(Attribute) new ColumnAttribute
@@ -167,7 +188,7 @@ namespace LinqToDB.EntityFrameworkCore
 							DbType          = prop.GetColumnType(),
 							IsPrimaryKey    = isPrimaryKey,
 							PrimaryKeyOrder = primaryKeyOrder,
-							IsIdentity      = prop.ValueGenerated == ValueGenerated.OnAdd,
+							IsIdentity      = isIdentity,
 						}};
 					}
 				}
@@ -193,25 +214,25 @@ namespace LinqToDB.EntityFrameworkCore
 						var fk = navigation.ForeignKey;
 						if (!navigation.IsOnDependent)
 						{
-							var thisKey = string.Join(",", fk.PrincipalKey.Properties.Select(p => p.Name));
+							var thisKey  = string.Join(",", fk.PrincipalKey.Properties.Select(p => p.Name));
 							var otherKey = string.Join(",", fk.Properties.Select(p => p.Name));
 							associations.Add(new AssociationAttribute
 							{
-								ThisKey = thisKey,
-								OtherKey = otherKey,
-								CanBeNull = !fk.IsRequired,
+								ThisKey         = thisKey,
+								OtherKey        = otherKey,
+								CanBeNull       = !fk.IsRequiredDependent,
 								IsBackReference = false
 							});
 						}
 						else
 						{
-							var thisKey = string.Join(",", fk.Properties.Select(p => p.Name));
+							var thisKey  = string.Join(",", fk.Properties.Select(p => p.Name));
 							var otherKey = string.Join(",", fk.PrincipalKey.Properties.Select(p => p.Name));
 							associations.Add(new AssociationAttribute
 							{
-								ThisKey = thisKey,
-								OtherKey = otherKey,
-								CanBeNull = !fk.IsRequired,
+								ThisKey         = thisKey,
+								OtherKey        = otherKey,
+								CanBeNull       = !fk.IsRequired,
 								IsBackReference = true
 							});
 						}
@@ -326,9 +347,9 @@ namespace LinqToDB.EntityFrameworkCore
 
 			public override bool Equals(object obj)
 			{
-				if (ReferenceEquals(null, obj)) return false;
+				if (obj is null) return false;
 				if (ReferenceEquals(this, obj)) return true;
-				if (obj.GetType() != this.GetType()) return false;
+				if (obj.GetType() != GetType()) return false;
 				return Equals((SqlTransparentExpression) obj);
 			}
 
@@ -431,8 +452,8 @@ namespace LinqToDB.EntityFrameworkCore
 					{
 						if (param is SqlTransparentExpression transparent)
 						{
-							if (transparent.Expression is ConstantExpression constantExpr &&
-							    expr is SqlConstantExpression sqlConstantExpr)
+							if (transparent.Expression is ConstantExpression &&
+							    expr is SqlConstantExpression)
 							{
 								//found = sqlConstantExpr.Value.Equals(constantExpr.Value);
 								found = true;
@@ -462,7 +483,7 @@ namespace LinqToDB.EntityFrameworkCore
 					if (!sqlFunction.IsNiladic)
 					{
 						text = text + "(";
-						for (int i = 0; i < sqlFunction.Arguments.Count; i++)
+						for (var i = 0; i < sqlFunction.Arguments.Count; i++)
 						{
 							var paramText = PrepareExpressionText(sqlFunction.Arguments[i]);
 							if (i > 0)
@@ -485,9 +506,7 @@ namespace LinqToDB.EntityFrameworkCore
 
 					var operand = newExpression.GetType().GetProperty("OperatorType")?.GetValue(newExpression).ToString();
 
-					var operandExpr = operand;
-
-					operandExpr = operand switch
+					var operandExpr = operand switch
 					{
 						"Contains"
 							when left!.Type.Name == "NpgsqlInetTypeMapping" ||
@@ -545,7 +564,7 @@ namespace LinqToDB.EntityFrameworkCore
 			var result = new EFCoreExpressionAttribute(expressionText)
 				{ ServerSideOnly = true, IsPredicate = memberInfo.GetMemberType() == typeof(bool) };
 
-			if (converted is SqlFunctionExpression || converted is SqlFragmentExpression)
+			if (converted is SqlFunctionExpression or SqlFragmentExpression)
 				result.Precedence = Precedence.Primary;
 
 			return result;

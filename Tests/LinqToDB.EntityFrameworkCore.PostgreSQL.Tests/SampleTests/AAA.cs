@@ -1,6 +1,9 @@
 ﻿using System;
 using System.Threading.Tasks;
 
+#pragma warning disable 8604
+#pragma warning disable CS8625
+
 namespace LinqToDB.EntityFrameworkCore.PostgreSQL.Tests.SampleTests
 {
 	public class Unit
@@ -22,11 +25,11 @@ namespace LinqToDB.EntityFrameworkCore.PostgreSQL.Tests.SampleTests
 		}
 
 		public static ArrangeResult<T, Unit> Arrange<T>(T @object) 
-			=> new ArrangeResult<T, Unit>(@object, default);
+			=> new(@object, default);
 
 		public static ArrangeResult<T, TMock> Arrange<T, TMock>(this TMock mock, Func<TMock, T> @object)
 			where TMock: notnull
-			=> new ArrangeResult<T, TMock>(@object(mock), mock);
+			=> new(@object(mock), mock);
 
 		public static ActResult<T, TMock> Act<T, TMock>(this ArrangeResult<T, TMock> arrange, Action<T> act)
 			where T : notnull
@@ -102,7 +105,7 @@ namespace LinqToDB.EntityFrameworkCore.PostgreSQL.Tests.SampleTests
 		public readonly struct ArrangeResult<T, TMock>
 			where TMock : notnull
 		{
-			internal ArrangeResult(T @object, TMock? mock) => (Object, Mock) = (@object, mock);
+			internal ArrangeResult(T @object, TMock mock) => (Object, Mock) = (@object, mock);
 			internal T Object { get; }
 			internal TMock Mock { get; }
 		}
@@ -110,7 +113,7 @@ namespace LinqToDB.EntityFrameworkCore.PostgreSQL.Tests.SampleTests
 		public readonly struct ActResult<T, TMock>
 			where T: notnull
 		{
-			internal ActResult(T? @object, TMock mock, Exception? exception)
+			internal ActResult(T @object, TMock mock, Exception? exception)
 				=> (Object, Mock, Exception) = (@object, mock, exception);
 			internal T Object { get; }
 			internal TMock Mock { get; }

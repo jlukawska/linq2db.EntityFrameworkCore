@@ -6,9 +6,6 @@ using System.Diagnostics;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
-using System.Text;
-using System.Threading;
-
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
@@ -19,9 +16,8 @@ using Microsoft.EntityFrameworkCore.Query.Internal;
 using Microsoft.Extensions.Logging;
 
 using JetBrains.Annotations;
-using LinqToDB.Common;
-using LinqToDB.Tools;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace LinqToDB.EntityFrameworkCore
 {
@@ -89,10 +85,10 @@ namespace LinqToDB.EntityFrameworkCore
 			#endregion
 		}
 
-		readonly ConcurrentDictionary<ProviderKey, IDataProvider> _knownProviders = new ConcurrentDictionary<ProviderKey, IDataProvider>();
+		readonly ConcurrentDictionary<ProviderKey, IDataProvider> _knownProviders = new();
 
-		private readonly MemoryCache _schemaCache = new MemoryCache(
-			new MemoryCacheOptions
+		private readonly MemoryCache _schemaCache = new(
+			new Microsoft.Extensions.Caching.Memory.MemoryCacheOptions()
 			{
 				ExpirationScanFrequency = TimeSpan.FromHours(1.0)
 			});
@@ -354,7 +350,7 @@ namespace LinqToDB.EntityFrameworkCore
 					providerName = ProviderName.SqlServer2012;
 					break;
 				default:
-					throw new ArgumentOutOfRangeException();
+					throw new ArgumentOutOfRangeException($"Version '{version}' is not supported.");
 			}
 
 			return new SqlServerDataProvider(providerName, version);
@@ -458,6 +454,10 @@ namespace LinqToDB.EntityFrameworkCore
 			{
 				// skipping enums
 				if (modelType.IsEnum)
+					continue;
+
+				// skipping arrays
+				if (modelType.IsArray)
 					continue;
 
 				MapEFCoreType(modelType);
@@ -627,7 +627,8 @@ namespace LinqToDB.EntityFrameworkCore
 		{
 			var type = method.Method.DeclaringType;
 
-			return type == typeof(Queryable) || (enumerable && type == typeof(Enumerable)) || type == typeof(LinqExtensions) ||
+			return type == typeof(Queryable) || (enumerable && type == typeof(Enumerable)) || type == typeof(LinqExtensions) || 
+			       type == typeof(DataExtensions) || type == typeof(TableExtensions) ||
 				   type == typeof(EntityFrameworkQueryableExtensions);
 		}
 
@@ -765,7 +766,6 @@ namespace LinqToDB.EntityFrameworkCore
 		/// <returns>Transformed expression.</returns>
 		public virtual Expression TransformExpression(Expression expression, IDataContext dc, DbContext? ctx, IModel? model)
 		{
-			var ignoreQueryFilters = false;
 			var tracking           = true;
 			var ignoreTracking     = false;
 
@@ -814,8 +814,10 @@ namespace LinqToDB.EntityFrameworkCore
 
 								if (generic == IgnoreQueryFiltersMethodInfo)
 								{
-									ignoreQueryFilters = true;
-									isTunnel = true;
+									var newMethod = Expression.Call(
+										Methods.LinqToDB.IgnoreFilters.MakeGenericMethod(methodCall.Method.GetGenericArguments()),
+										methodCall.Arguments[0], Expression.NewArrayInit(typeof(Type)));
+									return new TransformInfo(newMethod, false, true);
 								}
 								else if (generic == AsNoTrackingMethodInfo)
 								{
@@ -880,6 +882,16 @@ namespace LinqToDB.EntityFrameworkCore
 
 								if (isTunnel)
 									return new TransformInfo(methodCall.Arguments[0], false, true);
+							}
+
+							break;
+						}
+
+						if (typeof(ITable<>).IsSameOrParentOf(methodCall.Type))
+						{
+							if (generic.Name == "ToLinqToDBTable")
+							{
+								return new TransformInfo(methodCall.Arguments[0], false, true);
 							}
 
 							break;
@@ -973,13 +985,6 @@ namespace LinqToDB.EntityFrameworkCore
 
 			var newExpression = expression.Transform(e => LocalTransform(e));
 
-			if (ignoreQueryFilters)
-			{
-				var elementType = newExpression.Type.GetGenericArguments()[0];
-				newExpression = Expression.Call(Methods.LinqToDB.IgnoreFilters.MakeGenericMethod(elementType),
-					newExpression, Expression.NewArrayInit(typeof(Type)));
-			}
-
 			if (!ignoreTracking && dc is LinqToDBForEFToolsDataConnection dataConnection)
 			{
 				// ReSharper disable once ConditionIsAlwaysTrueOrFalse
@@ -1042,7 +1047,7 @@ namespace LinqToDB.EntityFrameworkCore
 			if (queryContextFactoryField == null)
 				throw new LinqToDBForEFToolsException($"Can not find private field '{compiler.GetType()}._queryContextFactory' in current EFCore Version.");
 
-			if (!(queryContextFactoryField.GetValue(compiler) is RelationalQueryContextFactory queryContextFactory))
+			if (queryContextFactoryField.GetValue(compiler) is not RelationalQueryContextFactory queryContextFactory)
 				throw new LinqToDBForEFToolsException("LinqToDB Tools for EFCore support only Relational Databases.");
 
 			var dependenciesProperty = typeof(RelationalQueryContextFactory).GetField("_dependencies", BindingFlags.NonPublic | BindingFlags.Instance);

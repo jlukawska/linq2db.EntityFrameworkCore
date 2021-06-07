@@ -5,7 +5,6 @@ using System.Linq.Expressions;
 
 using Microsoft.EntityFrameworkCore.Metadata;
 
-using JetBrains.Annotations;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.ChangeTracking.Internal;
 using Microsoft.EntityFrameworkCore.Infrastructure;
@@ -58,6 +57,7 @@ namespace LinqToDB.EntityFrameworkCore
 			Context          = context;
 			_model           = model;
 			_transformFunc   = transformFunc;
+			CopyDatabaseProperties();
 			if (LinqToDBForEFTools.EnableChangeTracker)
 				OnEntityCreated += OnEntityCreatedHandler;
 		}
@@ -81,6 +81,7 @@ namespace LinqToDB.EntityFrameworkCore
 			Context          = context;
 			_model           = model;
 			_transformFunc   = transformFunc;
+			CopyDatabaseProperties();
 			if (LinqToDBForEFTools.EnableChangeTracker)
 				OnEntityCreated += OnEntityCreatedHandler;
 		}
@@ -103,6 +104,7 @@ namespace LinqToDB.EntityFrameworkCore
 			Context          = context;
 			_model           = model;
 			_transformFunc   = transformFunc;
+			CopyDatabaseProperties();
 			if (LinqToDBForEFTools.EnableChangeTracker)
 				OnEntityCreated += OnEntityCreatedHandler;
 		}
@@ -169,5 +171,11 @@ namespace LinqToDB.EntityFrameworkCore
 			args.Entity = entry.Entity;
 		}
 
+		private void CopyDatabaseProperties()
+		{
+			var commandTimeout = Context?.Database.GetCommandTimeout();
+			if (commandTimeout != null)
+				CommandTimeout = commandTimeout.Value;
+		}
 	}
 }
